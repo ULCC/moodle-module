@@ -18,7 +18,6 @@
  * Library of functions for EQUELLA internal
  */
 
-defined('MOODLE_INTERNAL') || die;
 require_once($CFG->libdir.'/oauthlib.php');
 
 define('EQUELLA_ITEM_TYPE', 'mod');
@@ -30,12 +29,10 @@ function equella_get_course_contents($courseid, $sectionid) {
 
     $course = $DB->get_record('course', array('id' => $courseid), '*', MUST_EXIST);
 
-    if ($course->format != 'site') {
-        if (!file_exists($CFG->dirroot . '/course/format/' . $course->format . '/lib.php')) {
-            throw new moodle_exception('cannotgetcoursecontents', 'webservice', '', null, get_string('courseformatnotfound', 'error', '', $course->format));
-        } else {
-            require_once($CFG->dirroot . '/course/format/' . $course->format . '/lib.php');
-        }
+    if (!file_exists($CFG->dirroot . '/course/format/' . $course->format . '/lib.php')) {
+        throw new moodle_exception('cannotgetcoursecontents', 'webservice', '', null, get_string('courseformatnotfound', 'error', '', $course->format));
+    } else {
+        require_once($CFG->dirroot . '/course/format/' . $course->format . '/lib.php');
     }
 
     $context = context_course::instance($course->id, IGNORE_MISSING);
@@ -66,6 +63,9 @@ function equella_get_course_contents($courseid, $sectionid) {
             $sectionvalues->folders = array();
             $sectioncontents = array();
 
+            if (!isset($modinfo->sections[$section->section])) {
+                $modinfo->sections[$section->section] = array();
+            }
             //foreach ($modinfo->sections[$section->section] as $cmid) {
                 //$cm = $modinfo->cms[$cmid];
 
@@ -214,8 +214,34 @@ function equella_parse_query($str) {
 }
 
 function equella_build_integration_url($args, $appendtoken = true) {
-    global $USER, $CFG, $DB;
-
+    global $COURSE, $USER, $CFG, $DB;
+    
+    /* <integration>
+        <moodlecourseidnumber/>
+        <filesize>202877</filesize>
+        <token>
+        testclem:editingteacher:1391182410000:tSYbiRdYyYkAySK30Bkwnw==
+        </token>
+        <moodlecourseid>4918</moodlecourseid>
+        <moodlecourseshortname>test14</moodlecourseshortname>
+        <moodlecoursefullname>Test14</moodlecoursefullname>
+    </integration>
+    */
+    
+    // get course information
+    $idnumber = $COURSE->idnumber;
+    $id = $COURSE->id;
+    $short = $COURSE->shortname;
+    $full = $COURSE->fullname;
+        
+    $integrationXML = '<xml><integration>
+        <moodlecourseidnumber>'.$idnumber.'</moodlecourseidnumber>
+        <moodlecourseid>'.$id.'</moodlecourseid>
+        <moodlecourseshortname>'.$short.'</moodlecourseshortname>
+        <moodlecoursefullname>'.$full.'</moodlecoursefullname>
+    </integration></xml>';
+    
+    
     $callbackurlparams = array(
         'course' => $args->course,
         'section' => $args->section,
@@ -250,9 +276,9 @@ function equella_build_integration_url($args, $appendtoken = true) {
         'courseId'=>equella_get_courseId($args->course),
         'action'=>$CFG->equella_action,
         'selectMultiple'=>'true',
-        'cancelDisabled'=>'true',
         'returnurl'=>$callbackurl->out(false),
         'cancelurl'=>$cancelurl->out(false),
+        'itemXml'=>$integrationXML,
     );
     if ($appendtoken) {
         $course = $DB->get_record('course', array('id' => $args->course), '*', MUST_EXIST);
@@ -284,7 +310,7 @@ function equella_lti_params($equella, $course, $extra = array()) {
     $role = equella_lti_roles($USER, $equella->cmid, $equella->course);
 
     $requestparams = array(
-        'resource_link_id' => $CFG->siteidentifier . ':mod_equella:' . $equella->cmid,
+        'resource_link_id' => $equella->id,
         'resource_link_title' => $equella->name,
         'resource_link_description' => $equella->intro,
         'user_id' => $USER->id,
@@ -403,13 +429,6 @@ function equella_lti_build_sourcedid($instanceid, $userid, $launchid = null) {
     return $container;
 }
 
-function equella_debug_log($data) {
-    global $CFG;
-    if (defined('EQUELLA_DEV_DEBUG_MODE') && EQUELLA_DEV_DEBUG_MODE == true) {
-        file_put_contents("{$CFG->dataroot}/equella_error.log", time() . " => " . var_export($data, true) . "\n", FILE_APPEND);
-    }
-}
-
 /**
  * Signing and verifying
  */
@@ -493,17 +512,16 @@ class equella_lti_grading {
         if (empty($description)) {
             $description = $this->messagetype;
         }
-        $codemajor = strtolower($codemajor);
         $xml = <<<XML
 <?xml version="1.0" encoding="UTF-8"?>
-<imsx_POXEnvelopeResponse xmlns = "http://www.imsglobal.org/services/ltiv1p1/xsd/imsoms_v1p0">
+<imsx_POXEnvelopeResponse xmlns = "http://www.imsglobal.org/lis/oms1p0/pox">
     <imsx_POXHeader>
         <imsx_POXResponseHeaderInfo>
             <imsx_version>V1.0</imsx_version>
             <imsx_messageIdentifier>{$messageid}</imsx_messageIdentifier>
             <imsx_statusInfo>
                 <imsx_codeMajor>{$codemajor}</imsx_codeMajor>
-                <imsx_severity>status</imsx_severity>
+                <imsx_severity>Status</imsx_severity>
                 <imsx_description>{$description}</imsx_description>
                 <imsx_messageRefIdentifier>{$this->messageid}</imsx_messageRefIdentifier>
             </imsx_statusInfo>
@@ -678,7 +696,7 @@ XML;
                     $data = $this->parse_replace_message();
                     $this->handle_replace_message($data);
                 } catch (Exception $ex) {
-                    $responsexml = $this->get_response_xml('error', $ex->getMessage());
+                    $responsexml = $this->get_response_xml('Error', $ex->getMessage());
                     echo $responsexml->asXML();
                 }
                 break;
@@ -687,7 +705,7 @@ XML;
                     $data = $this->parse_grade_message();
                     $this->handle_read_message($data);
                 } catch (Exception $ex) {
-                    $responsexml = $this->get_response_xml('error', $ex->getMessage());
+                    $responsexml = $this->get_response_xml('Error', $ex->getMessage());
                     echo $responsexml->asXML();
                 }
                 break;
@@ -699,7 +717,7 @@ XML;
                 }
                 break;
             default:
-                $responsexml = $this->get_response_xml('unsupported', 'Unsupported request');
+                $responsexml = $this->get_response_xml('Unsupported', 'Unsupported request');
                 echo $responsexml->asXML();
                 break;
         }
